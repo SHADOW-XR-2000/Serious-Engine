@@ -1,0 +1,79 @@
+name: Extract ZIP and remove
+
+on:
+  push:
+    paths:
+      - '**.zip'
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: 'Путь к ZIP-файлу в репозитории (например, archive.zip)'
+        required: true
+        type: string
+      target_dir:
+        description: 'Каталог для распаковки (по умолчанию — корень)'
+        required: false
+        default: '.'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine ZIP path and target dir
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ZIP_PATH="${{ github.event.inputs.zip_path }}"
+            TARGET_DIR="${{ github.event.inputs.target_dir }}"
+          else
+            # Берём первый .zip из коммита
+            ZIP_PATH=$(git diff-tree --no-commit-id --name-only -r ${{ github.sha }} | grep -i '\.zip$' | head -n1)
+            TARGET_DIR="."
+          fi
+
+          if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
+            echo "ZIP-файл не найден: '$ZIP_PATH'"
+            exit 1
+          fi
+
+          mkdir -p "$TARGET_DIR"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "target_dir=$TARGET_DIR" >> "$GITHUB_OUTPUT"
+          echo "Распаковываем $ZIP_PATH -> $TARGET_DIR"
+
+      - name: Extract ZIP
+        run: |
+          unzip -o "${{ steps.vars.outputs.zip_path }}" -d "${{ steps.vars.outputs.target_dir }}"
+
+      - name: Commit extracted files
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Нет изменений после распаковки"
+          else
+            git commit -m "chore: extract ${{ steps.vars.outputs.zip_path }}"
+          fi
+
+      - name: Delete ZIP and commit removal
+        run: |
+          git rm -f "${{ steps.vars.outputs.zip_path }}"
+          git commit -m "chore: remove source archive ${{ steps.vars.outputs.zip_path }}"
+
+      - name: Push changes
+        run: |
+          git push
